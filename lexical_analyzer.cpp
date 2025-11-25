@@ -1,513 +1,287 @@
-#include <bits/stdc++.h>
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <cctype>
+#include <unordered_map>
+#include <vector>
+#include <set>
 using namespace std;
 
-struct Production {
-    string lhs;  // 左部非终结符(单个大写字母)
-    string rhs;  // 右部:如 "aB" / "a" / "@"
+/**
+ * LexicalAnalyzer：一个简单的词法分析器，按照状态转换图算法实现。
+ * 它从输入文件中逐字符读取源代码，识别单词符号（标识符、关键字、整数、运算符、分隔符），
+ * 并以 (TokenType, value) 格式输出词法分析结果。
+ *
+ * 词法分析器使用 Reserve、InsertId 和 InsertConst 函数来识别保留字、
+ * 将标识符插入符号表，以及将整型常量插入常量表。
+ *
+ * 本实现仅使用 C++ 标准库，不依赖第三方库。
+ * 程序结构清晰，模块分明，并包含注释，便于后续扩展。
+ */
+
+// Token结构定义（包含类型和值），可选
+struct Token {
+    string type;
+    string value;
 };
 
-struct Grammar {
-    bool isRightLinear;               // true: 右线性；false: 左线性(只是标记,算法中不强依赖)
-    vector<string> nonterminals;      // 非终结符集合(每个是长度1的大写字母)
-    vector<char> terminals;           // 终结符集合(单个小写字母)
-    string startSymbol;               // 开始符号
-    vector<Production> prods;         // 产生式集合
-};
+class LexicalAnalyzer {
+private:
+    // 保留字集合，用于快速查找关键字。
+    set<string> keywords;
+    // 标识符符号表（存储唯一的标识符字符串）。
+    unordered_map<string, int> symbolTableMap;
+    vector<string> symbolTableList; // 符号表索引到标识符字符串的映射
+    // 常量表（用于存储整数常量）。
+    unordered_map<int, int> constTableMap;
+    vector<int> constTableList;     // 常量表索引到整数值的映射
 
-struct NFA {
-    int nStates = 0;                            // 状态数
-    vector<char> alphabet;                     // 字母表
-    unordered_map<char,int> symIndex;          // 终结符 -> 下标
-    int start = 0;                             // 初始状态
-    vector<bool> isFinal;                      // 是否是终结状态
-    vector<vector<vector<int>>> trans;         // trans[state][symIdx] = {next states}
-    vector<vector<int>> eps;                   // eps[state] = {epsilon next states}
-};
-
-// ===================== 小工具 =====================
-
-void printGrammar(const Grammar& g) {
-    cout << (g.isRightLinear ? "Right-linear regular grammar:" : "Left-linear regular grammar:") << "\n";
-    cout << "(Here @ denotes the empty string ε)\n";
-    map<string, vector<string>> grouped;
-    for (auto &p : g.prods) {
-        grouped[p.lhs].push_back(p.rhs);
-    }
-    for (auto &nt : g.nonterminals) {
-        if (!grouped.count(nt)) continue;
-        auto &vec = grouped[nt];
-        sort(vec.begin(), vec.end());
-        vec.erase(unique(vec.begin(), vec.end()), vec.end());
-        cout << nt << "->";
-        for (size_t i = 0; i < vec.size(); ++i) {
-            if (i) cout << "|";
-            cout << vec[i];
-        }
-        cout << "\n";
-    }
-}
-
-void printNFA(const NFA& nfa) {
-    cout << "NFA information:\n";
-    cout << "Number of states: " << nfa.nStates << "\n";
-    cout << "Alphabet: ";
-    for (char c : nfa.alphabet) cout << c << " ";
-    cout << "\n";
-    cout << "Start state: " << nfa.start << "\n";
-    cout << "Final states: ";
-    for (int i = 0; i < nfa.nStates; ++i)
-        if (nfa.isFinal[i]) cout << i << " ";
-    cout << "\n";
-    cout << "Transition function (@ denotes ε-transitions):\n";
-    for (int s = 0; s < nfa.nStates; ++s) {
-        for (size_t si = 0; si < nfa.alphabet.size(); ++si) {
-            for (int to : nfa.trans[s][si]) {
-                cout << s << " --" << nfa.alphabet[si] << "--> " << to << "\n";
-            }
-        }
-        for (int to : nfa.eps[s]) {
-            cout << s << " --@--> " << to << "  (ε)\n";
-        }
-    }
-}
-
-// 输入函数
-
-Grammar readGrammar() {
-    Grammar g;
-    cout << "Please choose grammar type:\n";
-    cout << "1. Right-linear regular grammar\n";
-    cout << "2. Left-linear regular grammar\n";
-    int t;
-    cin >> t;
-    g.isRightLinear = (t == 1);
-
-    int nNT;
-    cout << "Please enter the number of nonterminals:";
-    cin >> nNT;
-    g.nonterminals.resize(nNT);
-    cout << "Please enter the nonterminals (separated by spaces, e.g. S A B):\n";
-    for (int i = 0; i < nNT; ++i) cin >> g.nonterminals[i];
-
-    int nT;
-    cout << "Please enter the number of terminals:";
-    cin >> nT;
-    g.terminals.resize(nT);
-    cout << "Please enter the terminals (separated by spaces, e.g. a b):\n";
-    for (int i = 0; i < nT; ++i) cin >> g.terminals[i];
-
-    cout << "Please enter the start symbol (e.g. S):";
-    cin >> g.startSymbol;
-
-    int nLines;
-    cout << "Please enter the number of production lines (each line may have multiple right-hand sides separated by |):";
-    cin >> nLines;
-    cout << "Example of line format:  S->aA|b|@\n";
-    cout << "Convention: @ denotes the empty string ε; the grammar must be in standard regular form.\n";
-    string line;
-    getline(cin, line); // 吃掉换行
-    for (int i = 0; i < nLines; ++i) {
-        getline(cin, line);
-        if (line.empty()) { --i; continue; }
-        string tmp;
-        for (char c : line) {
-            if (!isspace((unsigned char)c)) tmp.push_back(c);
-        }
-        auto pos = tmp.find("->");
-        if (pos == string::npos) {
-            cerr << "Production format error, skipping this line: " << line << "\n";
-            continue;
-        }
-        string lhs = tmp.substr(0, pos);
-        string rhsAll = tmp.substr(pos + 2);
-        string cur;
-        for (size_t j = 0; j <= rhsAll.size(); ++j) {
-            if (j == rhsAll.size() || rhsAll[j] == '|') {
-                if (!cur.empty()) {
-                    g.prods.push_back({lhs, cur});
-                }
-                cur.clear();
-            } else cur.push_back(rhsAll[j]);
-        }
-    }
-    return g;
-}
-
-NFA readNFA() {
-    NFA nfa;
-    cout << "Please enter the number of states of the NFA:";
-    cin >> nfa.nStates;
-
-    int m;
-    cout << "Please enter the number of input symbols:";
-    cin >> m;
-    nfa.alphabet.resize(m);
-    cout << "Please enter the input symbols (e.g. a b):\n";
-    for (int i = 0; i < m; ++i) {
-        cin >> nfa.alphabet[i];
-        nfa.symIndex[nfa.alphabet[i]] = i;
+    // 初始化保留字集合（模拟 Reserve 函数预置保留字）。
+    void initKeywords() {
+        // 将所有关键字插入 keywords 集合。
+        // 下列仅为题目要求的示例关键字（可扩展）。
+        keywords.insert("if");
+        keywords.insert("then");
+        keywords.insert("else");
+        // 可根据语言需要在此处增加其他保留字，如：
+        // keywords.insert("begin");
+        // keywords.insert("end");
+        // 等等。
     }
 
-    cout << "Please enter the index of the start state (0 ~ " << nfa.nStates - 1 << "):";
-    cin >> nfa.start;
-
-    nfa.isFinal.assign(nfa.nStates, false);
-    cout << "Please enter the number of final states:";
-    int f;
-    cin >> f;
-    cout << "Please enter the indices of the final states:";
-    for (int i = 0; i < f; ++i) {
-        int x;
-        cin >> x;
-        if (0 <= x && x < nfa.nStates) nfa.isFinal[x] = true;
+public:
+    LexicalAnalyzer() {
+        initKeywords();
     }
 
-    nfa.trans.assign(nfa.nStates, vector<vector<int>>(m));
-    nfa.eps.assign(nfa.nStates, {});
+    // 模拟 Reserve 函数：判断字符串是否为保留字
+    // 若是保留字则返回 true，否则返回 false。
+    bool Reserve(const string &strToken) {
+        return (keywords.find(strToken) != keywords.end());
+    }
 
-    cout << "Please enter the number of transitions:";
-    int t;
-    cin >> t;
-    cout << "Each transition format: source_state input_symbol target_state\n";
-    cout << "For an ε-transition, use @ as the input symbol\n";
-    for (int i = 0; i < t; ++i) {
-        int from, to;
-        string sym;
-        cin >> from >> sym >> to;
-        if (sym == "@") {
-            if (0 <= from && from < nfa.nStates && 0 <= to && to < nfa.nStates)
-                nfa.eps[from].push_back(to);
+    // 模拟 InsertId 函数：将标识符插入符号表（若已存在则直接返回索引）
+    // 返回符号表中该标识符的索引
+    int InsertId(const string &identifier) {
+        auto it = symbolTableMap.find(identifier);
+        if (it != symbolTableMap.end()) {
+            // 标识符已在表中，返回已有索引
+            return it->second;
         } else {
-            char c = sym[0];
-            auto it = nfa.symIndex.find(c);
-            if (it == nfa.symIndex.end()) {
-                cerr << "Unknown input symbol " << c << ", ignoring this transition\n";
-                continue;
-            }
-            int idx = it->second;
-            nfa.trans[from][idx].push_back(to);
+            // 新标识符，插入符号表
+            int index = symbolTableList.size();
+            symbolTableList.push_back(identifier);
+            symbolTableMap[identifier] = index;
+            return index;
         }
     }
-    return nfa;
-}
 
-//  核心算法:文法 -> NFA 
-
-// 右线性正规文法 -> NFA
-NFA RightGrammarToNFA(const Grammar& g) {
-    NFA nfa;
-    int nNT = (int)g.nonterminals.size();
-    nfa.nStates = nNT + 1; // 多一个收尾终结状态
-    int finalState = nfa.nStates - 1;
-
-    // 字母表
-    nfa.alphabet = g.terminals;
-    for (size_t i = 0; i < g.terminals.size(); ++i)
-        nfa.symIndex[g.terminals[i]] = (int)i;
-
-    // 非终结符 -> 状态编号映射
-    unordered_map<string,int> ntIndex;
-    for (int i = 0; i < nNT; ++i)
-        ntIndex[g.nonterminals[i]] = i;
-
-    auto itStart = ntIndex.find(g.startSymbol);
-    if (itStart == ntIndex.end()) {
-        cerr << "Start symbol not in the set of nonterminals, failed to construct NFA!\n";
-        nfa.nStates = 0;
-        return nfa;
-    }
-    nfa.start = itStart->second;
-
-    nfa.isFinal.assign(nfa.nStates, false);
-    nfa.isFinal[finalState] = true;
-    nfa.trans.assign(nfa.nStates,
-                     vector<vector<int>>(nfa.alphabet.size()));
-    nfa.eps.assign(nfa.nStates, {});
-
-    for (auto &p : g.prods) {
-        auto it = ntIndex.find(p.lhs);
-        if (it == ntIndex.end()) continue;
-        int from = it->second;
-        const string &rhs = p.rhs;
-
-        if (rhs == "@") {
-            // A -> ε:对应状态 A 也是终结状态
-            nfa.isFinal[from] = true;
-        } else if (rhs.size() == 1) {
-            // A -> a
-            char a = rhs[0];
-            auto itSym = nfa.symIndex.find(a);
-            if (itSym == nfa.symIndex.end()) {
-                cerr << "Unknown terminal " << a << " appears in production, ignored\n";
-                continue;
-            }
-            int idx = itSym->second;
-            nfa.trans[from][idx].push_back(finalState);
-        } else if (rhs.size() == 2) {
-            // A -> aB
-            char a = rhs[0];
-            string B(1, rhs[1]);
-            auto itSym = nfa.symIndex.find(a);
-            auto itNT = ntIndex.find(B);
-            if (itSym == nfa.symIndex.end() || itNT == ntIndex.end()) {
-                cerr << "Production " << p.lhs << "->" << rhs
-                     << " does not match the A->aB form, ignored\n";
-                continue;
-            }
-            int idx = itSym->second;
-            int to = itNT->second;
-            nfa.trans[from][idx].push_back(to);
+    // 模拟 InsertConst 函数：将常量插入常量表（若不存在则插入）
+    // 将数字字符串转换为整数值进行存储
+    // 返回常量表中该常量的索引
+    int InsertConst(const string &constLexeme) {
+        // 将字符串转换为整数（假设输入格式合法）
+        int value = 0;
+        try {
+            value = stoi(constLexeme);
+        } catch (...) {
+            value = 0; // 若转换失败，赋值0（一般不会发生）
+        }
+        auto it = constTableMap.find(value);
+        if (it != constTableMap.end()) {
+            // 常量已存在，返回原索引
+            return it->second;
         } else {
-            cerr << "Right-hand side of production too long (>2), not supported by this program:" 
-                 << p.lhs << "->" << rhs << "\n";
+            // 新常量，插入常量表
+            int index = constTableList.size();
+            constTableList.push_back(value);
+            constTableMap[value] = index;
+            return index;
         }
     }
 
-    return nfa;
-}
-
-// NFA 反转:得到识别逆语言的 NFA
-NFA ReverseNFA(const NFA& a) {
-    NFA b;
-    b.alphabet = a.alphabet;
-    for (size_t i = 0; i < b.alphabet.size(); ++i)
-        b.symIndex[b.alphabet[i]] = (int)i;
-
-    b.nStates = a.nStates + 1; // 新增一个统一初始状态
-    int newStart = a.nStates;
-    b.start = newStart;
-
-    b.isFinal.assign(b.nStates, false);
-    b.trans.assign(b.nStates,
-                   vector<vector<int>>(b.alphabet.size()));
-    b.eps.assign(b.nStates, {});
-
-    // 新 NFA 的唯一终结状态是旧的初始状态
-    b.isFinal[a.start] = true;
-
-    int m = (int)b.alphabet.size();
-
-    // 反转所有非 ε 转换
-    for (int p = 0; p < a.nStates; ++p) {
-        for (int si = 0; si < m; ++si) {
-            for (int q : a.trans[p][si]) {
-                b.trans[q][si].push_back(p);
+    // 词法分析主函数：从输入流读取字符，识别单词符号并写入输出流。
+    void analyze(ifstream &fin, ofstream &fout) {
+        char c;
+        // 从输入流逐字符读取直到文件结束
+        while (true) {
+            c = fin.get();
+            if (!fin) { // 文件结束或读取错误
+                break;
             }
-        }
-        // 反转 ε 转换
-        for (int q : a.eps[p]) {
-            b.eps[q].push_back(p);
-        }
-    }
 
-    // 新初始状态 通过 ε-边 指向原来的所有终结状态
-    for (int q = 0; q < a.nStates; ++q) {
-        if (a.isFinal[q]) {
-            b.eps[newStart].push_back(q);
-        }
-    }
-
-    return b;
-}
-
-// 左线性文法 -> NFA
-NFA LeftGrammarToNFA(const Grammar& g) {
-    Grammar gr;
-    gr.isRightLinear = true;
-    gr.nonterminals = g.nonterminals;
-    gr.terminals = g.terminals;
-    gr.startSymbol = g.startSymbol;
-    gr.prods.clear();
-
-    for (auto &p : g.prods) {
-        string newRhs;
-        if (p.rhs == "@") newRhs = "@";
-        else newRhs = string(p.rhs.rbegin(), p.rhs.rend());
-        gr.prods.push_back({p.lhs, newRhs});
-    }
-
-    NFA nfaForReverse = RightGrammarToNFA(gr); // 识别 L^R
-    NFA result = ReverseNFA(nfaForReverse);    // 识别 L
-    return result;
-}
-
-// 核心算法:NFA -> 文法
-vector<vector<int>> epsilonClosures(const NFA& a) {
-    int n = a.nStates;
-    vector<vector<int>> clos(n);
-    for (int s = 0; s < n; ++s) {
-        vector<int> stack{ s };
-        vector<int> vis(n, 0);
-        vis[s] = 1;
-        while (!stack.empty()) {
-            int x = stack.back(); stack.pop_back();
-            clos[s].push_back(x);
-            for (int y : a.eps[x]) {
-                if (!vis[y]) {
-                    vis[y] = 1;
-                    stack.push_back(y);
-                }
+            // 跳过空白字符（空格、制表符、换行等）
+            if (isspace(static_cast<unsigned char>(c))) {
+                // 不产生记号，继续读取下一个字符
+                continue;
             }
-        }
-    }
-    return clos;
-}
 
-// 消除 NFA 的 ε-转换,得到等价的 ε-自由 NFA
-NFA RemoveEpsilon(const NFA& a) {
-    NFA b;
-    b.nStates = a.nStates;
-    b.alphabet = a.alphabet;
-    for (size_t i = 0; i < b.alphabet.size(); ++i)
-        b.symIndex[b.alphabet[i]] = (int)i;
-    b.start = a.start;
-
-    int n = b.nStates;
-    int m = (int)b.alphabet.size();
-    b.trans.assign(n, vector<vector<int>>(m));
-    b.eps.assign(n, {}); // 不再有 ε-边
-    b.isFinal.assign(n, false);
-
-    auto clos = epsilonClosures(a);
-
-    // 新的终结状态:ε-闭包中包含任一旧终结状态
-    for (int s = 0; s < n; ++s) {
-        bool f = false;
-        for (int t : clos[s]) {
-            if (a.isFinal[t]) { f = true; break; }
-        }
-        b.isFinal[s] = f;
-    }
-
-    // 新的转换函数:δ'(p, a) = ?_{r ∈ ε-closure(p)} ε-closure(δ(r,a))
-    for (int s = 0; s < n; ++s) {
-        for (int si = 0; si < m; ++si) {
-            set<int> dest;
-            for (int r : clos[s]) {
-                for (int q : a.trans[r][si]) {
-                    for (int t : clos[q]) {
-                        dest.insert(t);
+            // 初始状态：判断该字符开始的是哪类单词符号
+            if (isalpha(static_cast<unsigned char>(c))) {
+                // 识别标识符或关键字
+                // 状态转换：以字母开头进入标识符/关键字识别状态
+                string lexeme;
+                lexeme.push_back(c);
+                // 持续读取字母或数字字符，组成完整标识符
+                while (true) {
+                    char nextChar = fin.peek();  // 预读下一个字符
+                    if (isalnum(static_cast<unsigned char>(nextChar))) {
+                        // 若下一个字符是字母或数字，属于标识符的一部分
+                        lexeme.push_back(fin.get());  // 读取并追加字符
+                    } else {
+                        // 遇到非字母数字字符，标识符结束
+                        break;
                     }
                 }
+                // 已完整读取一个标识符字符串（可能是关键字）
+                if (Reserve(lexeme)) {
+                    // 该字符串是保留字
+                    fout << "(KEYWORD, " << lexeme << ")" << endl;
+                } else {
+                    // 非保留字，则是用户定义的标识符
+                    int idIndex = InsertId(lexeme);
+                    fout << "(ID, " << idIndex << ")" << endl;
+                }
             }
-            b.trans[s][si] = vector<int>(dest.begin(), dest.end());
+            else if (isdigit(static_cast<unsigned char>(c))) {
+                // 识别整数常量
+                // 状态转换：以数字开头进入整数常量识别状态
+                string number;
+                number.push_back(c);
+                // 持续读取后续数字字符
+                while (true) {
+                    char nextChar = fin.peek();
+                    if (isdigit(static_cast<unsigned char>(nextChar))) {
+                        number.push_back(fin.get());
+                    } else {
+                        break;
+                    }
+                }
+                // 已完整读取一个数字常量
+                // 注：如出现 "123abc" 这样的情况应当视为词法错误
+                // （简化处理：假定数字和字母之间总有分隔符）
+                int constIndex = InsertConst(number);
+                fout << "(INT, " << constIndex << ")" << endl;
+            }
+            else {
+                // 运算符或分隔符等单字符处理，以及多字符运算符判别
+                if (c == '+') {
+                    // '+' 运算符（加法）
+                    fout << "(OPERATOR, +)" << endl;
+                }
+                else if (c == '-') {
+                    // '-' 运算符（减法）
+                    fout << "(OPERATOR, -)" << endl;
+                }
+                else if (c == '*') {
+                    // '*' 运算符，或作为 "**" 运算符（乘方）的开始
+                    char nextChar = fin.peek();
+                    if (nextChar == '*') {
+                        // 识别到 "**" 运算符
+                        fin.get(); // 消耗第二个 '*'
+                        fout << "(OPERATOR, **)" << endl;
+                    } else {
+                        // 单个 '*' 运算符（乘法）
+                        fout << "(OPERATOR, *)" << endl;
+                    }
+                }
+                else if (c == '=') {
+                    // '=' 运算符，或作为 "==" 运算符的开始
+                    char nextChar = fin.peek();
+                    if (nextChar == '=') {
+                        // 识别到 "==" 运算符（等于比较）
+                        fin.get(); // 消耗第二个 '='
+                        fout << "(OPERATOR, ==)" << endl;
+                    } else {
+                        // 单个 '=' 运算符（赋值或比较）
+                        fout << "(OPERATOR, =)" << endl;
+                    }
+                }
+                else if (c == ':') {
+                    // ':' 符号，或作为 ":=" 运算符的开始
+                    char nextChar = fin.peek();
+                    if (nextChar == '=') {
+                        // 识别到 ":=" 运算符（赋值）
+                        fin.get(); // 消耗 '='
+                        fout << "(OPERATOR, :=)" << endl;
+                    } else {
+                        // 单独的 ':' 在该语言中无独立含义（此处作为分隔符处理）
+                        fout << "(SEPARATOR, :)" << endl;
+                    }
+                }
+                else if (c == ';') {
+                    // ';' 分隔符（语句结束符）
+                    fout << "(SEPARATOR, ;)" << endl;
+                }
+                else if (c == ',') {
+                    // ',' 分隔符（列表分隔符）
+                    fout << "(SEPARATOR, ,)" << endl;
+                }
+                else if (c == '(') {
+                    // '(' 分隔符（左括号）
+                    fout << "(SEPARATOR, " << c << ")" << endl;
+                }
+                else if (c == ')') {
+                    // ')' 分隔符（右括号）
+                    fout << "(SEPARATOR, " << c << ")" << endl;
+                }
+                else if (c == '{') {
+                    // '{' 分隔符（左花括号）
+                    fout << "(SEPARATOR, {)" << endl;
+                }
+                else if (c == '}') {
+                    // '}' 分隔符（右花括号）
+                    fout << "(SEPARATOR, })" << endl;
+                }
+                else {
+                    // 未识别的字符或运算符
+                    // 将其作为 UNKNOWN 记号输出（或忽略）
+                    fout << "(UNKNOWN, " << c << ")" << endl;
+                }
+            }
         }
     }
+};
 
-    return b;
-}
-
-// NFA -> 右线性正规文法
-Grammar NFAtoRightGrammar(const NFA& a) {
-    NFA b = RemoveEpsilon(a);
-
-    Grammar g;
-    g.isRightLinear = true;
-    g.terminals = b.alphabet;
-
-    int n = b.nStates;
-    if (n > 26) {
-        cerr << "Warning: number of states " << n << " > 26, cannot represent all nonterminals with single uppercase letters.\n";
-        cerr << "The following construction will still proceed, but you may need to rename them manually to meet assignment requirements.\n";
+int main(int argc, char* argv[]) {
+    // 检查参数：需要提供输入文件路径
+    string inputFile;
+    string outputFile;
+    if (argc < 2) {
+        // cerr << "Usage: " << argv[0] << " <source code file> [output file]" << endl;
+        // return 1;
+        inputFile = "input.txt"; // 默认输入文件名
+    } else {
+        inputFile = argv[1];
+    }
+    if (argc >= 3) {
+        outputFile = argv[2];
+    } else {
+        outputFile = "output.txt"; // 默认输出文件名
     }
 
-    g.nonterminals.clear();
-    vector<string> ids(n);
-    for (int i = 0; i < n; ++i) {
-        char c = 'A' + (i % 26);
-        ids[i] = string(1, c);
-        g.nonterminals.push_back(ids[i]);
+    ifstream fin(inputFile);
+    if (!fin) {
+        cerr << "Error: Unable to open input file " << inputFile << endl;
+        return 1;
+    }
+    ofstream fout(outputFile);
+    if (!fout) {
+        cerr << "Error: Unable to create output file " << outputFile << endl;
+        return 1;
     }
 
-    g.startSymbol = ids[b.start];
+    // 创建词法分析器实例并执行分析
+    LexicalAnalyzer lexer;
+    lexer.analyze(fin, fout);
 
-    // 转移 => 产生式 A_p -> a A_q
-    for (int s = 0; s < n; ++s) {
-        string lhs = ids[s];
-        for (size_t si = 0; si < b.alphabet.size(); ++si) {
-            char c = b.alphabet[si];
-            for (int q : b.trans[s][si]) {
-                string rhs;
-                rhs.push_back(c);
-                rhs += ids[q];
-                g.prods.push_back({lhs, rhs});
-            }
-        }
-    }
+    fin.close();
+    fout.close();
 
-    // 终结状态 => 加 A_p -> @
-    for (int s = 0; s < n; ++s) {
-        if (b.isFinal[s]) {
-            g.prods.push_back({ids[s], "@"});
-        }
-    }
-
-    return g;
-}
-
-// NFA -> 左线性正规文法
-Grammar NFAtoLeftGrammar(const NFA& a) {
-    NFA rev = ReverseNFA(a);          // 识别 L^R
-    Grammar gRight = NFAtoRightGrammar(rev); // 右线性文法,识别 L^R
-
-    Grammar gLeft;
-    gLeft.isRightLinear = false;
-    gLeft.nonterminals = gRight.nonterminals;
-    gLeft.terminals = gRight.terminals;
-    gLeft.startSymbol = gRight.startSymbol;
-
-    for (auto &p : gRight.prods) {
-        string newRhs;
-        if (p.rhs == "@") newRhs = "@";
-        else newRhs = string(p.rhs.rbegin(), p.rhs.rend());
-        gLeft.prods.push_back({p.lhs, newRhs});
-    }
-    return gLeft;
-}
-
-int main() {
-    // cout<<"OK";
-    while (1) {
-        cout << "=====================================\n";
-        cout << "Conversion between regular grammars (left/right-linear) and FA\n";
-        cout << "=====================================\n";
-        cout << "1. Regular grammar -> FA\n";
-        cout << "2. FA -> right-linear regular grammar\n";
-        cout << "3. FA -> left-linear regular grammar\n";
-        cout << "0. Exit\n";
-        cout << "Please enter an option:";
-
-        int op;
-        if (!(cin >> op)) break;
-        if (op == 0) break;
-
-        if (op == 1) {
-            Grammar g = readGrammar();
-            NFA nfa;
-            if (g.isRightLinear) {
-                nfa = RightGrammarToNFA(g);
-            } else {
-                nfa = LeftGrammarToNFA(g);
-            }
-            if (nfa.nStates == 0) {
-                cerr << "Failed to construct NFA, please check whether the grammar input is in regular form.\n";
-            } else {
-                printNFA(nfa);
-            }
-        } else if (op == 2) {
-            NFA nfa = readNFA();
-            Grammar g = NFAtoRightGrammar(nfa);
-            printGrammar(g);
-        } else if (op == 3) {
-            NFA nfa = readNFA();
-            Grammar g = NFAtoLeftGrammar(nfa);
-            printGrammar(g);
-        } else {
-            cout << "Invalid option, please try again.\n";
-        }
-
-        cout << "\n";
-    }
-
+    cout << "Lexical analysis completed, results have been written to " << outputFile << endl;
     return 0;
 }
+/*
+g++ lexical_analyzer.cpp -o lexical_analyzer
+./lexical_analyzer input.txt output.txt
+*/
