@@ -9,3 +9,8 @@ dependencies = [
     "pandas>=2.3.3",
     "streamlit>=1.51.0",
 ]
+
+[dependency-groups]
+dev = [
+    "coverage>=7.12.0",
+]
