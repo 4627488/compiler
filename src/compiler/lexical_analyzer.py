@@ -37,10 +37,10 @@ class LexicalAnalyzer:
                 i += 1
                 continue
             
-            if char.isalpha():
+            if char.isalpha() or char == '_':
                 lexeme = char
                 i += 1
-                while i < n and (source_code[i].isalnum()):
+                while i < n and (source_code[i].isalnum() or source_code[i] == '_'):
                     lexeme += source_code[i]
                     i += 1
                 

@@ -23,7 +23,7 @@ class RG_NFA_Converter:
                 start_symbol = lhs
             non_terminals.add(lhs)
             
-            prods = [p.strip() for p in rhs_part.split('|')]
+            prods = [p.strip().replace(' ', '') for p in rhs_part.split('|')]
             for p in prods:
                 grammar[lhs].append(p)
                 for char in p:
