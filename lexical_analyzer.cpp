@@ -2,33 +2,33 @@
 using namespace std;
 
 struct Production {
-    string lhs;  // ×ó²¿·ÇÖÕ½á·û(µ¥¸ö´óĞ´×ÖÄ¸)
-    string rhs;  // ÓÒ²¿:Èç "aB" / "a" / "@"
+    string lhs;  // å·¦éƒ¨éç»ˆç»“ç¬¦(å•ä¸ªå¤§å†™å­—æ¯)
+    string rhs;  // å³éƒ¨:å¦‚ "aB" / "a" / "@"
 };
 
 struct Grammar {
-    bool isRightLinear;               // true: ÓÒÏßĞÔ£»false: ×óÏßĞÔ(Ö»ÊÇ±ê¼Ç,Ëã·¨ÖĞ²»Ç¿ÒÀÀµ)
-    vector<string> nonterminals;      // ·ÇÖÕ½á·û¼¯ºÏ(Ã¿¸öÊÇ³¤¶È1µÄ´óĞ´×ÖÄ¸)
-    vector<char> terminals;           // ÖÕ½á·û¼¯ºÏ(µ¥¸öĞ¡Ğ´×ÖÄ¸)
-    string startSymbol;               // ¿ªÊ¼·ûºÅ
-    vector<Production> prods;         // ²úÉúÊ½¼¯ºÏ
+    bool isRightLinear;               // true: å³çº¿æ€§ï¼›false: å·¦çº¿æ€§(åªæ˜¯æ ‡è®°,ç®—æ³•ä¸­ä¸å¼ºä¾èµ–)
+    vector<string> nonterminals;      // éç»ˆç»“ç¬¦é›†åˆ(æ¯ä¸ªæ˜¯é•¿åº¦1çš„å¤§å†™å­—æ¯)
+    vector<char> terminals;           // ç»ˆç»“ç¬¦é›†åˆ(å•ä¸ªå°å†™å­—æ¯)
+    string startSymbol;               // å¼€å§‹ç¬¦å·
+    vector<Production> prods;         // äº§ç”Ÿå¼é›†åˆ
 };
 
 struct NFA {
-    int nStates = 0;                            // ×´Ì¬Êı
-    vector<char> alphabet;                     // ×ÖÄ¸±í
-    unordered_map<char,int> symIndex;          // ÖÕ½á·û -> ÏÂ±ê
-    int start = 0;                             // ³õÊ¼×´Ì¬
-    vector<bool> isFinal;                      // ÊÇ·ñÊÇÖÕ½á×´Ì¬
+    int nStates = 0;                            // çŠ¶æ€æ•°
+    vector<char> alphabet;                     // å­—æ¯è¡¨
+    unordered_map<char,int> symIndex;          // ç»ˆç»“ç¬¦ -> ä¸‹æ ‡
+    int start = 0;                             // åˆå§‹çŠ¶æ€
+    vector<bool> isFinal;                      // æ˜¯å¦æ˜¯ç»ˆç»“çŠ¶æ€
     vector<vector<vector<int>>> trans;         // trans[state][symIdx] = {next states}
     vector<vector<int>> eps;                   // eps[state] = {epsilon next states}
 };
 
-// ===================== Ğ¡¹¤¾ß =====================
+// ===================== å°å·¥å…· =====================
 
 void printGrammar(const Grammar& g) {
     cout << (g.isRightLinear ? "Right-linear regular grammar:" : "Left-linear regular grammar:") << "\n";
-    cout << "(Here @ denotes the empty string ¦Å)\n";
+    cout << "(Here @ denotes the empty string Îµ)\n";
     map<string, vector<string>> grouped;
     for (auto &p : g.prods) {
         grouped[p.lhs].push_back(p.rhs);
@@ -58,7 +58,7 @@ void printNFA(const NFA& nfa) {
     for (int i = 0; i < nfa.nStates; ++i)
         if (nfa.isFinal[i]) cout << i << " ";
     cout << "\n";
-    cout << "Transition function (@ denotes ¦Å-transitions):\n";
+    cout << "Transition function (@ denotes Îµ-transitions):\n";
     for (int s = 0; s < nfa.nStates; ++s) {
         for (size_t si = 0; si < nfa.alphabet.size(); ++si) {
             for (int to : nfa.trans[s][si]) {
@@ -66,12 +66,12 @@ void printNFA(const NFA& nfa) {
             }
         }
         for (int to : nfa.eps[s]) {
-            cout << s << " --@--> " << to << "  (¦Å)\n";
+            cout << s << " --@--> " << to << "  (Îµ)\n";
         }
     }
 }
 
-// ÊäÈëº¯Êı
+// è¾“å…¥å‡½æ•°
 
 Grammar readGrammar() {
     Grammar g;
@@ -103,9 +103,9 @@ Grammar readGrammar() {
     cout << "Please enter the number of production lines (each line may have multiple right-hand sides separated by |):";
     cin >> nLines;
     cout << "Example of line format:  S->aA|b|@\n";
-    cout << "Convention: @ denotes the empty string ¦Å; the grammar must be in standard regular form.\n";
+    cout << "Convention: @ denotes the empty string Îµ; the grammar must be in standard regular form.\n";
     string line;
-    getline(cin, line); // ³Ôµô»»ĞĞ
+    getline(cin, line); // åƒæ‰æ¢è¡Œ
     for (int i = 0; i < nLines; ++i) {
         getline(cin, line);
         if (line.empty()) { --i; continue; }
@@ -169,7 +169,7 @@ NFA readNFA() {
     int t;
     cin >> t;
     cout << "Each transition format: source_state input_symbol target_state\n";
-    cout << "For an ¦Å-transition, use @ as the input symbol\n";
+    cout << "For an Îµ-transition, use @ as the input symbol\n";
     for (int i = 0; i < t; ++i) {
         int from, to;
         string sym;
@@ -191,21 +191,21 @@ NFA readNFA() {
     return nfa;
 }
 
-//  ºËĞÄËã·¨:ÎÄ·¨ -> NFA 
+//  æ ¸å¿ƒç®—æ³•:æ–‡æ³• -> NFA 
 
-// ÓÒÏßĞÔÕı¹æÎÄ·¨ -> NFA
+// å³çº¿æ€§æ­£è§„æ–‡æ³• -> NFA
 NFA RightGrammarToNFA(const Grammar& g) {
     NFA nfa;
     int nNT = (int)g.nonterminals.size();
-    nfa.nStates = nNT + 1; // ¶àÒ»¸öÊÕÎ²ÖÕ½á×´Ì¬
+    nfa.nStates = nNT + 1; // å¤šä¸€ä¸ªæ”¶å°¾ç»ˆç»“çŠ¶æ€
     int finalState = nfa.nStates - 1;
 
-    // ×ÖÄ¸±í
+    // å­—æ¯è¡¨
     nfa.alphabet = g.terminals;
     for (size_t i = 0; i < g.terminals.size(); ++i)
         nfa.symIndex[g.terminals[i]] = (int)i;
 
-    // ·ÇÖÕ½á·û -> ×´Ì¬±àºÅÓ³Éä
+    // éç»ˆç»“ç¬¦ -> çŠ¶æ€ç¼–å·æ˜ å°„
     unordered_map<string,int> ntIndex;
     for (int i = 0; i < nNT; ++i)
         ntIndex[g.nonterminals[i]] = i;
@@ -231,7 +231,7 @@ NFA RightGrammarToNFA(const Grammar& g) {
         const string &rhs = p.rhs;
 
         if (rhs == "@") {
-            // A -> ¦Å:¶ÔÓ¦×´Ì¬ A Ò²ÊÇÖÕ½á×´Ì¬
+            // A -> Îµ:å¯¹åº”çŠ¶æ€ A ä¹Ÿæ˜¯ç»ˆç»“çŠ¶æ€
             nfa.isFinal[from] = true;
         } else if (rhs.size() == 1) {
             // A -> a
@@ -266,14 +266,14 @@ NFA RightGrammarToNFA(const Grammar& g) {
     return nfa;
 }
 
-// NFA ·´×ª:µÃµ½Ê¶±ğÄæÓïÑÔµÄ NFA
+// NFA åè½¬:å¾—åˆ°è¯†åˆ«é€†è¯­è¨€çš„ NFA
 NFA ReverseNFA(const NFA& a) {
     NFA b;
     b.alphabet = a.alphabet;
     for (size_t i = 0; i < b.alphabet.size(); ++i)
         b.symIndex[b.alphabet[i]] = (int)i;
 
-    b.nStates = a.nStates + 1; // ĞÂÔöÒ»¸öÍ³Ò»³õÊ¼×´Ì¬
+    b.nStates = a.nStates + 1; // æ–°å¢ä¸€ä¸ªç»Ÿä¸€åˆå§‹çŠ¶æ€
     int newStart = a.nStates;
     b.start = newStart;
 
@@ -282,25 +282,25 @@ NFA ReverseNFA(const NFA& a) {
                    vector<vector<int>>(b.alphabet.size()));
     b.eps.assign(b.nStates, {});
 
-    // ĞÂ NFA µÄÎ¨Ò»ÖÕ½á×´Ì¬ÊÇ¾ÉµÄ³õÊ¼×´Ì¬
+    // æ–° NFA çš„å”¯ä¸€ç»ˆç»“çŠ¶æ€æ˜¯æ—§çš„åˆå§‹çŠ¶æ€
     b.isFinal[a.start] = true;
 
     int m = (int)b.alphabet.size();
 
-    // ·´×ªËùÓĞ·Ç ¦Å ×ª»»
+    // åè½¬æ‰€æœ‰é Îµ è½¬æ¢
     for (int p = 0; p < a.nStates; ++p) {
         for (int si = 0; si < m; ++si) {
             for (int q : a.trans[p][si]) {
                 b.trans[q][si].push_back(p);
             }
         }
-        // ·´×ª ¦Å ×ª»»
+        // åè½¬ Îµ è½¬æ¢
         for (int q : a.eps[p]) {
             b.eps[q].push_back(p);
         }
     }
 
-    // ĞÂ³õÊ¼×´Ì¬ Í¨¹ı ¦Å-±ß Ö¸ÏòÔ­À´µÄËùÓĞÖÕ½á×´Ì¬
+    // æ–°åˆå§‹çŠ¶æ€ é€šè¿‡ Îµ-è¾¹ æŒ‡å‘åŸæ¥çš„æ‰€æœ‰ç»ˆç»“çŠ¶æ€
     for (int q = 0; q < a.nStates; ++q) {
         if (a.isFinal[q]) {
             b.eps[newStart].push_back(q);
@@ -310,7 +310,7 @@ NFA ReverseNFA(const NFA& a) {
     return b;
 }
 
-// ×óÏßĞÔÎÄ·¨ -> NFA
+// å·¦çº¿æ€§æ–‡æ³• -> NFA
 NFA LeftGrammarToNFA(const Grammar& g) {
     Grammar gr;
     gr.isRightLinear = true;
@@ -326,12 +326,12 @@ NFA LeftGrammarToNFA(const Grammar& g) {
         gr.prods.push_back({p.lhs, newRhs});
     }
 
-    NFA nfaForReverse = RightGrammarToNFA(gr); // Ê¶±ğ L^R
-    NFA result = ReverseNFA(nfaForReverse);    // Ê¶±ğ L
+    NFA nfaForReverse = RightGrammarToNFA(gr); // è¯†åˆ« L^R
+    NFA result = ReverseNFA(nfaForReverse);    // è¯†åˆ« L
     return result;
 }
 
-// ºËĞÄËã·¨:NFA -> ÎÄ·¨
+// æ ¸å¿ƒç®—æ³•:NFA -> æ–‡æ³•
 vector<vector<int>> epsilonClosures(const NFA& a) {
     int n = a.nStates;
     vector<vector<int>> clos(n);
@@ -353,7 +353,7 @@ vector<vector<int>> epsilonClosures(const NFA& a) {
     return clos;
 }
 
-// Ïû³ı NFA µÄ ¦Å-×ª»»,µÃµ½µÈ¼ÛµÄ ¦Å-×ÔÓÉ NFA
+// æ¶ˆé™¤ NFA çš„ Îµ-è½¬æ¢,å¾—åˆ°ç­‰ä»·çš„ Îµ-è‡ªç”± NFA
 NFA RemoveEpsilon(const NFA& a) {
     NFA b;
     b.nStates = a.nStates;
@@ -365,12 +365,12 @@ NFA RemoveEpsilon(const NFA& a) {
     int n = b.nStates;
     int m = (int)b.alphabet.size();
     b.trans.assign(n, vector<vector<int>>(m));
-    b.eps.assign(n, {}); // ²»ÔÙÓĞ ¦Å-±ß
+    b.eps.assign(n, {}); // ä¸å†æœ‰ Îµ-è¾¹
     b.isFinal.assign(n, false);
 
     auto clos = epsilonClosures(a);
 
-    // ĞÂµÄÖÕ½á×´Ì¬:¦Å-±Õ°üÖĞ°üº¬ÈÎÒ»¾ÉÖÕ½á×´Ì¬
+    // æ–°çš„ç»ˆç»“çŠ¶æ€:Îµ-é—­åŒ…ä¸­åŒ…å«ä»»ä¸€æ—§ç»ˆç»“çŠ¶æ€
     for (int s = 0; s < n; ++s) {
         bool f = false;
         for (int t : clos[s]) {
@@ -379,7 +379,7 @@ NFA RemoveEpsilon(const NFA& a) {
         b.isFinal[s] = f;
     }
 
-    // ĞÂµÄ×ª»»º¯Êı:¦Ä'(p, a) = ?_{r ¡Ê ¦Å-closure(p)} ¦Å-closure(¦Ä(r,a))
+    // æ–°çš„è½¬æ¢å‡½æ•°:Î´'(p, a) = ?_{r âˆˆ Îµ-closure(p)} Îµ-closure(Î´(r,a))
     for (int s = 0; s < n; ++s) {
         for (int si = 0; si < m; ++si) {
             set<int> dest;
@@ -397,7 +397,7 @@ NFA RemoveEpsilon(const NFA& a) {
     return b;
 }
 
-// NFA -> ÓÒÏßĞÔÕı¹æÎÄ·¨
+// NFA -> å³çº¿æ€§æ­£è§„æ–‡æ³•
 Grammar NFAtoRightGrammar(const NFA& a) {
     NFA b = RemoveEpsilon(a);
 
@@ -421,7 +421,7 @@ Grammar NFAtoRightGrammar(const NFA& a) {
 
     g.startSymbol = ids[b.start];
 
-    // ×ªÒÆ => ²úÉúÊ½ A_p -> a A_q
+    // è½¬ç§» => äº§ç”Ÿå¼ A_p -> a A_q
     for (int s = 0; s < n; ++s) {
         string lhs = ids[s];
         for (size_t si = 0; si < b.alphabet.size(); ++si) {
@@ -435,7 +435,7 @@ Grammar NFAtoRightGrammar(const NFA& a) {
         }
     }
 
-    // ÖÕ½á×´Ì¬ => ¼Ó A_p -> @
+    // ç»ˆç»“çŠ¶æ€ => åŠ  A_p -> @
     for (int s = 0; s < n; ++s) {
         if (b.isFinal[s]) {
             g.prods.push_back({ids[s], "@"});
@@ -445,10 +445,10 @@ Grammar NFAtoRightGrammar(const NFA& a) {
     return g;
 }
 
-// NFA -> ×óÏßĞÔÕı¹æÎÄ·¨
+// NFA -> å·¦çº¿æ€§æ­£è§„æ–‡æ³•
 Grammar NFAtoLeftGrammar(const NFA& a) {
-    NFA rev = ReverseNFA(a);          // Ê¶±ğ L^R
-    Grammar gRight = NFAtoRightGrammar(rev); // ÓÒÏßĞÔÎÄ·¨,Ê¶±ğ L^R
+    NFA rev = ReverseNFA(a);          // è¯†åˆ« L^R
+    Grammar gRight = NFAtoRightGrammar(rev); // å³çº¿æ€§æ–‡æ³•,è¯†åˆ« L^R
 
     Grammar gLeft;
     gLeft.isRightLinear = false;
