@@ -1,5 +1,7 @@
 # Compiler Principles Visualization System
 
+**项目地址：** [https://github.com/4627488/compiler](https://github.com/4627488/compiler)
+
 这是一个基于 Python 和 Streamlit 开发的编译器原理可视化工具。主要用于演示编译原理中的核心算法过程。
 
 ## 功能模块
