@@ -144,64 +144,74 @@ F -> ( E ) | i"""
     if st.button("Parse", key="slr_btn"):
         parser = SLRParser()
         parser.parse_grammar(slr_grammar_input)
-        parser.build_table() # This computes first, follow, and builds tables
-        
-        st.subheader("First & Follow Sets")
+        parser.build_table()  # builds FIRST, FOLLOW, ACTION/GOTO
+
+        # --- Productions (including augmented) ---
+        st.subheader("📑 Productions (Augmented Grammar)")
+        st.table(pd.DataFrame(parser.get_productions_display()))
+
+        # --- Grammar Snapshot ---
+        st.subheader("📊 Grammar Snapshot")
+        col_a, col_b, col_c, col_d = st.columns(4)
+        col_a.metric("States", len(parser.states))
+        col_b.metric("Terminals", len(parser.terminals))
+        col_c.metric("Non-Terminals", len(parser.non_terminals))
+        col_d.metric("Productions", len(parser.productions))
+
+        # --- Terminals & Non-Terminals ---
+        st.markdown(f"**Terminals:** {', '.join(sorted(parser.terminals))}")
+        st.markdown(f"**Non-Terminals:** {', '.join(sorted(parser.non_terminals))}")
+
+        # --- SLR(1) Status ---
+        st.subheader("🔍 SLR(1) Status")
+        if parser.is_slr():
+            st.success("✅ Grammar is SLR(1) — no shift/reduce or reduce/reduce conflicts detected.")
+        else:
+            st.error("❌ Grammar is NOT SLR(1). Conflicts detected in the ACTION table.")
+            conflict_rows = []
+            for c in parser.conflicts:
+                formatted_actions = []
+                for act in c["actions"]:
+                    formatted_actions.append(parser._format_action_verbose(act))
+                conflict_rows.append({
+                    "State": f"I{c['state']}",
+                    "Symbol": c["symbol"],
+                    "Actions": ", ".join(formatted_actions),
+                    "Kind": c["kind"]
+                })
+            st.table(pd.DataFrame(conflict_rows))
+
+        # --- First & Follow Sets ---
+        st.subheader("🐲 First & Follow Sets")
         ff_data = []
-        for nt in parser.non_terminals:
-            if nt == parser.augmented_start: continue
+        for nt in sorted(parser.non_terminals):
             ff_data.append({
                 "Non-Terminal": nt,
-                "First": ", ".join(parser.first[nt]),
-                "Follow": ", ".join(parser.follow[nt])
+                "FIRST": "{ " + ", ".join(sorted(parser.first[nt])) + " }",
+                "FOLLOW": "{ " + ", ".join(sorted(parser.follow[nt])) + " }"
             })
         st.table(pd.DataFrame(ff_data))
-        
-        st.subheader("Canonical Collection of LR(0) Items")
-        states_data = []
-        for i, state in enumerate(parser.states):
-            items_str = []
-            for (lhs, rhs, dot) in state:
-                rhs_list = list(rhs)
-                rhs_list.insert(dot, ".")
-                items_str.append(f"{lhs} -> {' '.join(rhs_list)}")
-            states_data.append({
-                "State ID": i,
-                "Items": "\n".join(items_str)
-            })
-        st.table(pd.DataFrame(states_data))
 
-        st.subheader("Parsing Table")
-        # Combine Action and Goto tables
-        # Columns: Terminals (Action) + Non-Terminals (Goto)
-        all_symbols = sorted(list(parser.terminals)) + sorted(list(parser.non_terminals))
-        if parser.augmented_start in all_symbols:
-            all_symbols.remove(parser.augmented_start)
-            
-        table_rows = []
-        for i in range(len(parser.states)):
-            row_dict = {"State": i}
-            for sym in all_symbols:
-                val = ""
-                if sym in parser.terminals:
-                    if (i, sym) in parser.action_table:
-                        action = parser.action_table[(i, sym)]
-                        if action[0] == 'shift':
-                            val = f"s{action[1]}"
-                        elif action[0] == 'reduce':
-                            val = f"r{action[1]}"
-                        elif action[0] == 'accept':
-                            val = "acc"
-                elif sym in parser.non_terminals:
-                    if (i, sym) in parser.goto_table:
-                        val = str(parser.goto_table[(i, sym)])
-                
-                row_dict[sym] = val
-            table_rows.append(row_dict)
-            
-        st.dataframe(pd.DataFrame(table_rows).set_index("State"))
-        
-        st.subheader("Parsing Process")
+        # --- Canonical Collection of LR(0) Items ---
+        st.subheader("🍁 Canonical Collection of LR(0) Items")
+        for row in parser.get_states_display():
+            with st.expander(f"State {row['State']}"):
+                st.text(row["Items"])
+
+        # --- State Transitions ---
+        if parser.transitions:
+            st.subheader("🔀 State Transitions (GOTO Table)")
+            trans_rows = parser.get_transitions_display()
+            st.dataframe(pd.DataFrame(trans_rows))
+
+        # --- Parsing Table ---
+        st.subheader("📋 Parsing Table (ACTION | GOTO)")
+        action_syms, goto_syms, table_rows = parser.get_parsing_table_matrix()
+        if table_rows:
+            df = pd.DataFrame(table_rows).set_index("State")
+            st.dataframe(df)
+
+        st.subheader("⚙️ Parsing Process")
         try:
             steps = parser.parse(slr_input_str)
             st.table(pd.DataFrame(steps))

@@ -1,81 +1,129 @@
 from collections import defaultdict
+from typing import Dict, List, Set, Tuple, Optional
+
 
 class SLRParser:
-    def __init__(self):
-        self.grammar = defaultdict(list)
-        self.productions = []  # list of (lhs, rhs)
-        self.start_symbol = ''
-        self.terminals = set()
-        self.non_terminals = set()
-        self.first = defaultdict(set)
-        self.follow = defaultdict(set)
-        self.action_table = {}
-        self.goto_table = {}
-        self.states = []  # list of frozenset of items
+    """
+    SLR(1) Parser implementation matching the C++ slr.cpp logic.
+    """
+    EPSILON = '^'
+    END_SYMBOL = '#'
 
-    def parse_grammar(self, text):
-        self.grammar = defaultdict(list)
-        self.terminals = set()
-        self.non_terminals = set()
-        self.start_symbol = None
-        self.productions = []
+    def __init__(self):
+        self._reset_state()
+
+    def _reset_state(self):
+        self.grammar: Dict[str, List[List[str]]] = defaultdict(list)
+        self.productions: List[Tuple[str, Tuple[str, ...]]] = []  # indexed; 0 is augmented
+        self.production_index: Dict[Tuple[str, Tuple[str, ...]], int] = {}
+        self.start_symbol: str = ''
+        self.augmented_start: str = ''
+        self.terminals: Set[str] = set()
+        self.non_terminals: Set[str] = set()
+        self.first: Dict[str, Set[str]] = defaultdict(set)
+        self.follow: Dict[str, Set[str]] = defaultdict(set)
+        self.action_table: Dict[Tuple[int, str], Tuple] = {}
+        self.goto_table: Dict[Tuple[int, str], int] = {}
+        self.states: List[frozenset] = []
+        self.transitions: List[Dict[str, object]] = []
+        self.conflicts: List[Dict[str, object]] = []
+
+    # -------------------------------------------------------
+    # Grammar parsing
+    # -------------------------------------------------------
+    def _split_rhs(self, alt: str) -> List[str]:
+        """Split a RHS alternative into symbols. Supports either space-separated
+        tokens or a compact form like i+i*i with optional primes."""
+        alt = alt.strip()
+        if alt == self.EPSILON or alt == 'ε':
+            return [self.EPSILON]
+
+        if ' ' in alt:
+            return [sym for sym in alt.split() if sym]
+
+        symbols: List[str] = []
+        i = 0
+        while i < len(alt):
+            if alt[i].isspace():
+                i += 1
+                continue
+            sym = alt[i]
+            i += 1
+            # Handle primes like E'
+            while i < len(alt) and alt[i] == "'":
+                sym += "'"
+                i += 1
+            # Handle multi-char identifiers like "id"
+            if sym.isalpha() and sym.islower():
+                while i < len(alt) and alt[i].isalnum():
+                    sym += alt[i]
+                    i += 1
+            symbols.append(sym)
+        return symbols
+
+    def _is_non_terminal(self, sym: str) -> bool:
+        """Check if symbol is a non-terminal (starts with uppercase letter)."""
+        return len(sym) > 0 and sym[0].isupper()
+
+    def parse_grammar(self, text: str):
+        self._reset_state()
 
         lines = text.strip().split('\n')
-        parsed_rules = []
+        raw_productions: List[Tuple[str, List[str]]] = []
 
         for line in lines:
             line = line.strip()
-            if not line or "->" not in line:
+            if not line or '->' not in line:
                 continue
-            lhs, rhs_part = line.split("->")
+            lhs, rhs_part = line.split('->', 1)
             lhs = lhs.strip()
             if not self.start_symbol:
                 self.start_symbol = lhs
             self.non_terminals.add(lhs)
 
-            alts = [x.strip() for x in rhs_part.split('|')]
-            for alt in alts:
-                if ' ' in alt:
-                    symbols = alt.split()
-                else:
-                    symbols = []
-                    i = 0
-                    while i < len(alt):
-                        sym = alt[i]
-                        if i + 1 < len(alt) and alt[i+1] == "'":
-                            sym += "'"
-                            i += 2
-                        else:
-                            i += 1
-                        symbols.append(sym)
-                
-                # Convert to tuple for hashability in items
-                parsed_rules.append((lhs, tuple(symbols)))
+            alternatives = [alt.strip() for alt in rhs_part.split('|') if alt.strip()]
+            for alt in alternatives:
+                symbols = self._split_rhs(alt)
+                raw_productions.append((lhs, symbols))
                 self.grammar[lhs].append(symbols)
 
-        # Identify terminals
+        # Collect all non-terminals from RHS as well
+        for lhs in list(self.grammar.keys()):
+            for rhs in self.grammar[lhs]:
+                for sym in rhs:
+                    if self._is_non_terminal(sym):
+                        self.non_terminals.add(sym)
+
+        # Identify terminals (anything that's not a non-terminal and not epsilon)
         for lhs in self.grammar:
             for rhs in self.grammar[lhs]:
                 for sym in rhs:
-                    if sym not in self.grammar and sym != '^':
+                    if sym != self.EPSILON and sym not in self.non_terminals:
                         self.terminals.add(sym)
-        
-        self.terminals.add('#')
+        self.terminals.add(self.END_SYMBOL)
 
-        # Augment grammar
-        original_start = self.start_symbol
-        self.augmented_start = original_start + "'"
+        # Augment grammar: S' -> S
+        self.augmented_start = self.start_symbol + "'"
         while self.augmented_start in self.non_terminals:
-             self.augmented_start += "'"
-        
+            self.augmented_start += "'"
         self.non_terminals.add(self.augmented_start)
-        self.grammar[self.augmented_start].append([original_start])
-        
-        # Rebuild productions list: 0 is augmented rule
-        self.productions = [(self.augmented_start, (original_start,))]
-        for lhs, rhs in parsed_rules:
-            self.productions.append((lhs, rhs))
+        self.grammar[self.augmented_start] = [[self.start_symbol]]
 
+        # Build productions list: 0 is augmented rule
+        self.productions = []
+        self.production_index = {}
+        self._add_production(self.augmented_start, tuple([self.start_symbol]))
+        for lhs, rhs in raw_productions:
+            self._add_production(lhs, tuple(rhs))
+
+    def _add_production(self, lhs: str, rhs: Tuple[str, ...]):
+        idx = len(self.productions)
+        self.productions.append((lhs, rhs))
+        self.production_index[(lhs, rhs)] = idx
+
+    # -------------------------------------------------------
+    # FIRST & FOLLOW
+    # -------------------------------------------------------
     def compute_first(self):
         self.first = defaultdict(set)
         changed = True
@@ -83,280 +131,464 @@ class SLRParser:
             changed = False
             for lhs in self.grammar:
                 for rhs in self.grammar[lhs]:
-                    if rhs == ['^']:
-                        if '^' not in self.first[lhs]:
-                            self.first[lhs].add('^')
+                    # Handle epsilon production
+                    if rhs == [self.EPSILON]:
+                        if self.EPSILON not in self.first[lhs]:
+                            self.first[lhs].add(self.EPSILON)
                             changed = True
                         continue
-                    
-                    rhs_has_epsilon = True
+
+                    all_can_eps = True
                     for sym in rhs:
-                        sym_first = set()
+                        if sym == self.EPSILON:
+                            continue
                         if sym in self.terminals:
-                            sym_first.add(sym)
-                        elif sym in self.grammar:
-                            sym_first = self.first[sym]
-                        
-                        for f in sym_first:
-                            if f != '^':
-                                if f not in self.first[lhs]:
-                                    self.first[lhs].add(f)
-                                    changed = True
-                        
-                        if '^' not in sym_first:
-                            rhs_has_epsilon = False
+                            if sym not in self.first[lhs]:
+                                self.first[lhs].add(sym)
+                                changed = True
+                            all_can_eps = False
                             break
-                    
-                    if rhs_has_epsilon:
-                        if '^' not in self.first[lhs]:
-                            self.first[lhs].add('^')
+                        if sym in self.non_terminals:
+                            before = len(self.first[lhs])
+                            self.first[lhs] |= {x for x in self.first[sym] if x != self.EPSILON}
+                            if len(self.first[lhs]) != before:
+                                changed = True
+                            if self.EPSILON not in self.first[sym]:
+                                all_can_eps = False
+                                break
+                        else:
+                            # Unknown symbol, treat as terminal
+                            if sym not in self.first[lhs]:
+                                self.first[lhs].add(sym)
+                                changed = True
+                            all_can_eps = False
+                            break
+
+                    if all_can_eps:
+                        if self.EPSILON not in self.first[lhs]:
+                            self.first[lhs].add(self.EPSILON)
                             changed = True
 
     def compute_follow(self):
         self.follow = defaultdict(set)
-        self.follow[self.start_symbol].add('#') # Original start symbol gets #
-        # Augmented start symbol follow is empty or irrelevant for parsing table usually, 
-        # but we parse starting from augmented rule.
-        
+        # Add # to FOLLOW of augmented start symbol (like C++ does with $)
+        self.follow[self.augmented_start].add(self.END_SYMBOL)
+        # Also add to original start symbol
+        self.follow[self.start_symbol].add(self.END_SYMBOL)
+
         changed = True
         while changed:
             changed = False
             for lhs in self.grammar:
                 for rhs in self.grammar[lhs]:
                     for i, sym in enumerate(rhs):
-                        if sym in self.non_terminals:
-                            beta_first = set()
-                            beta_has_epsilon = True
-                            
-                            if i + 1 < len(rhs):
-                                for next_sym in rhs[i+1:]:
-                                    next_first = set()
-                                    if next_sym in self.terminals:
-                                        next_first.add(next_sym)
-                                    elif next_sym in self.grammar:
-                                        next_first = self.first[next_sym]
-                                    
-                                    for f in next_first:
-                                        if f != '^':
-                                            beta_first.add(f)
-                                    
-                                    if '^' not in next_first:
-                                        beta_has_epsilon = False
-                                        break
-                            else:
-                                pass
-                            
-                            for f in beta_first:
-                                if f not in self.follow[sym]:
-                                    self.follow[sym].add(f)
-                                    changed = True
-                            
-                            if beta_has_epsilon:
-                                for f in self.follow[lhs]:
-                                    if f not in self.follow[sym]:
-                                        self.follow[sym].add(f)
-                                        changed = True
+                        if sym not in self.non_terminals:
+                            continue
 
-    def closure(self, items):
-        # items is a set of (lhs, rhs, dot_index)
+                        # Case 1: A -> αBβ, add FIRST(β) - {ε} to FOLLOW(B)
+                        trailer = rhs[i + 1:]
+                        first_beta = self._first_of_sequence(trailer)
+
+                        before = len(self.follow[sym])
+                        self.follow[sym] |= {x for x in first_beta if x != self.EPSILON}
+                        if len(self.follow[sym]) != before:
+                            changed = True
+
+                        # Case 2: A -> αB or A -> αBβ where ε ∈ FIRST(β)
+                        # Add FOLLOW(A) to FOLLOW(B)
+                        if not trailer or self.EPSILON in first_beta:
+                            before = len(self.follow[sym])
+                            self.follow[sym] |= self.follow[lhs]
+                            if len(self.follow[sym]) != before:
+                                changed = True
+
+    def _first_of_sequence(self, seq: List[str]) -> Set[str]:
+        result: Set[str] = set()
+        if not seq:
+            result.add(self.EPSILON)
+            return result
+        for sym in seq:
+            if sym == self.EPSILON:
+                continue
+            if sym in self.terminals:
+                result.add(sym)
+                return result
+            if sym in self.non_terminals:
+                result |= {x for x in self.first[sym] if x != self.EPSILON}
+                if self.EPSILON not in self.first[sym]:
+                    return result
+            else:
+                result.add(sym)
+                return result
+        result.add(self.EPSILON)
+        return result
+
+    # -------------------------------------------------------
+    # LR(0) items & canonical collection
+    # -------------------------------------------------------
+    def closure(self, items: Set[Tuple[str, Tuple[str, ...], int]]) -> frozenset:
+        """Compute closure of a set of LR(0) items."""
         closure_set = set(items)
+        added_left = set()  # Track which non-terminals we've added items for
+
         changed = True
         while changed:
             changed = False
             new_items = set()
-            for (lhs, rhs, dot) in closure_set:
+            for (lhs, rhs, dot) in list(closure_set):
                 if dot < len(rhs):
                     symbol = rhs[dot]
-                    if symbol in self.non_terminals:
+                    if symbol in self.non_terminals and symbol not in added_left:
+                        added_left.add(symbol)
+                        # Add all productions for this non-terminal
                         for prod_rhs in self.grammar[symbol]:
-                            # Handle epsilon: if prod is ^, dot is at end? 
-                            # Usually represented as empty rhs or special char.
-                            # Here we use '^'. If rhs is ['^'], it effectively matches empty.
-                            # But for LR items, A -> . means A -> epsilon.
-                            # If our grammar has A -> ^, we should treat it as A -> . (empty tuple)
-                            
-                            actual_rhs = tuple(prod_rhs)
-                            if actual_rhs == ('^',):
-                                actual_rhs = ()
-                            
-                            item = (symbol, actual_rhs, 0)
+                            if prod_rhs == [self.EPSILON]:
+                                item = (symbol, tuple(), 0)
+                            else:
+                                item = (symbol, tuple(prod_rhs), 0)
                             if item not in closure_set:
                                 new_items.add(item)
-            
             if new_items:
                 closure_set.update(new_items)
                 changed = True
         return frozenset(closure_set)
 
-    def goto(self, items, symbol):
-        new_items = set()
+    def goto(self, items: frozenset, symbol: str) -> frozenset:
+        """Compute GOTO(items, symbol)."""
+        moved = set()
         for (lhs, rhs, dot) in items:
             if dot < len(rhs) and rhs[dot] == symbol:
-                new_items.add((lhs, rhs, dot + 1))
-        return self.closure(new_items)
+                moved.add((lhs, rhs, dot + 1))
+        return self.closure(moved) if moved else frozenset()
 
     def canonical_collection(self):
-        # Initial item: S' -> . S
-        start_prod_rhs = self.productions[0][1] # (S,)
-        initial_item = (self.augmented_start, start_prod_rhs, 0)
-        
-        initial_state = self.closure({initial_item})
-        self.states = [initial_state]
-        
-        # We need to map state (frozenset) to index
-        state_map = {initial_state: 0}
-        
+        """Build the canonical collection of LR(0) item sets."""
+        # Initial item: S' -> .S
+        start_rhs = tuple([self.start_symbol])
+        start_item = (self.augmented_start, start_rhs, 0)
+        i0 = self.closure({start_item})
+
+        self.states = [i0]
+        state_map = {i0: 0}
+        self.transitions = []
+
         queue = [0]
         while queue:
-            state_idx = queue.pop(0)
-            state_items = self.states[state_idx]
-            
-            # Collect all symbols that can appear after dot
+            cur_idx = queue.pop(0)
+            state_items = self.states[cur_idx]
+
+            # Collect all symbols that appear after the dot
             symbols = set()
             for (lhs, rhs, dot) in state_items:
                 if dot < len(rhs):
                     symbols.add(rhs[dot])
-            
+
             for sym in symbols:
                 next_state = self.goto(state_items, sym)
                 if not next_state:
                     continue
-                
+
                 if next_state not in state_map:
                     state_map[next_state] = len(self.states)
                     self.states.append(next_state)
-                    queue.append(len(self.states) - 1)
-                
-                next_state_idx = state_map[next_state]
-                
-                if sym in self.terminals:
-                    self.action_table[(state_idx, sym)] = ('shift', next_state_idx)
-                elif sym in self.non_terminals:
-                    self.goto_table[(state_idx, sym)] = next_state_idx
+                    queue.append(state_map[next_state])
 
+                to_idx = state_map[next_state]
+                is_terminal = sym in self.terminals
+                self.transitions.append({
+                    "from": cur_idx,
+                    "symbol": sym,
+                    "to": to_idx,
+                    "kind": 'T' if is_terminal else 'N'
+                })
+
+    # -------------------------------------------------------
+    # Parsing table construction
+    # -------------------------------------------------------
     def build_table(self):
+        self.action_table = {}
+        self.goto_table = {}
+        self.conflicts = []
+
         self.compute_first()
         self.compute_follow()
         self.canonical_collection()
-        
-        # Add reduce actions and accept
-        for i, state_items in enumerate(self.states):
-            for (lhs, rhs, dot) in state_items:
-                if dot == len(rhs): # Dot at end
-                    if lhs == self.augmented_start:
-                        self.action_table[(i, '#')] = ('accept',)
-                    else:
-                        # Reduce A -> alpha
-                        # Find production index
-                        # Note: rhs in items might be () if it was ^
-                        # In productions list, we stored it as tuple of symbols, or ('^',) ?
-                        # In parse_grammar, we stored ('^',) if it was ^.
-                        # In closure, we converted ('^',) to ().
-                        # So we need to match carefully.
-                        
-                        lookup_rhs = rhs
-                        if len(rhs) == 0:
-                            # It was epsilon production. In productions list it might be ('^',)
-                            # Let's check how we stored it.
-                            # In parse_grammar: self.grammar[lhs].append(symbols) -> symbols is ['^']
-                            # self.productions.append((lhs, tuple(symbols))) -> (lhs, ('^',))
-                            pass
-                        
-                        # Try to find (lhs, rhs) in self.productions
-                        prod_idx = -1
-                        for idx, (p_lhs, p_rhs) in enumerate(self.productions):
-                            if p_lhs == lhs:
-                                if p_rhs == ('^',) and rhs == ():
-                                    prod_idx = idx
-                                    break
-                                if p_rhs == rhs:
-                                    prod_idx = idx
-                                    break
-                        
-                        if prod_idx != -1:
-                            for a in self.follow[lhs]:
-                                if (i, a) in self.action_table:
-                                    # Conflict
-                                    existing = self.action_table[(i, a)]
-                                    # print(f"Conflict at state {i}, symbol {a}: {existing} vs reduce {prod_idx}")
-                                    pass
-                                self.action_table[(i, a)] = ('reduce', prod_idx)
 
-    def parse(self, input_string):
-        if not input_string.endswith('#'):
-            input_string += '#'
-            
-        stack = [0]
-        steps = []
-        
-        # Tokenize
-        tokens = []
+        cell_actions: Dict[Tuple[int, str], List[Tuple]] = defaultdict(list)
+
+        for state_idx, state_items in enumerate(self.states):
+            for (lhs, rhs, dot) in state_items:
+                if dot < len(rhs):
+                    # Shift or goto
+                    symbol = rhs[dot]
+                    next_state = self._find_transition(state_idx, symbol)
+                    if next_state is not None:
+                        if symbol in self.terminals:
+                            # Shift action
+                            cell_actions[(state_idx, symbol)].append(('shift', next_state))
+                        else:
+                            # Goto (non-terminal)
+                            self.goto_table[(state_idx, symbol)] = next_state
+                else:
+                    # Dot at end - reduce or accept
+                    if lhs == self.augmented_start:
+                        # Accept
+                        cell_actions[(state_idx, self.END_SYMBOL)].append(('accept',))
+                    else:
+                        # Reduce
+                        prod_idx = self._production_lookup(lhs, rhs)
+                        if prod_idx != -1:
+                            for terminal in self.follow[lhs]:
+                                cell_actions[(state_idx, terminal)].append(('reduce', prod_idx))
+
+        # Resolve conflicts and fill action table
+        for key, actions in cell_actions.items():
+            if len(actions) > 1:
+                kinds = {a[0] for a in actions}
+                if 'shift' in kinds and 'reduce' in kinds:
+                    conflict_kind = 'shift/reduce'
+                elif kinds == {'reduce'}:
+                    conflict_kind = 'reduce/reduce'
+                else:
+                    conflict_kind = 'ambiguous'
+                self.conflicts.append({
+                    "state": key[0],
+                    "symbol": key[1],
+                    "actions": actions,
+                    "kind": conflict_kind
+                })
+
+            # Select action (prefer shift over reduce)
+            chosen = self._select_action(actions)
+            if chosen:
+                self.action_table[key] = chosen
+
+    def _find_transition(self, from_state: int, symbol: str) -> Optional[int]:
+        for t in self.transitions:
+            if t["from"] == from_state and t["symbol"] == symbol:
+                return t["to"]
+        return None
+
+    def _production_lookup(self, lhs: str, rhs: Tuple[str, ...]) -> int:
+        key = (lhs, rhs)
+        if key in self.production_index:
+            return self.production_index[key]
+        # Handle epsilon case
+        if rhs == ():
+            key = (lhs, (self.EPSILON,))
+            return self.production_index.get(key, -1)
+        return -1
+
+    def _select_action(self, actions: List[Tuple]) -> Optional[Tuple]:
+        if not actions:
+            return None
+        # Prefer shift over reduce
+        for a in actions:
+            if a[0] == 'shift':
+                return a
+        return actions[0]
+
+    def is_slr(self) -> bool:
+        return len(self.conflicts) == 0
+
+    # -------------------------------------------------------
+    # Display helpers for UI
+    # -------------------------------------------------------
+    def _format_action(self, action: Tuple) -> str:
+        if not action:
+            return ''
+        kind = action[0]
+        if kind == 'shift':
+            return f"s{action[1]}"
+        if kind == 'reduce':
+            return f"r{action[1]}"
+        if kind == 'accept':
+            return 'acc'
+        return 'err'
+
+    def _format_action_verbose(self, action: Tuple) -> str:
+        if not action:
+            return ''
+        kind = action[0]
+        if kind == 'shift':
+            return f"s{action[1]}"
+        if kind == 'reduce':
+            lhs, rhs = self.productions[action[1]]
+            rhs_str = ' '.join(rhs) if rhs != (self.EPSILON,) and rhs != () else self.EPSILON
+            return f"r{action[1]} ({lhs} -> {rhs_str})"
+        if kind == 'accept':
+            return 'acc'
+        return 'err'
+
+    def get_productions_display(self) -> List[Dict[str, object]]:
+        """Get all productions for display, including augmented."""
+        display = []
+        for idx, (lhs, rhs) in enumerate(self.productions):
+            rhs_str = ' '.join(rhs) if rhs and rhs != (self.EPSILON,) else self.EPSILON
+            display.append({"Index": idx, "Production": f"{lhs} -> {rhs_str}"})
+        return display
+
+    def get_states_display(self) -> List[Dict[str, object]]:
+        """Get canonical collection items for display."""
+        rows = []
+        for idx, state in enumerate(self.states):
+            items_str = []
+            sorted_items = sorted(state, key=lambda x: (x[0], x[1], x[2]))
+            for (lhs, rhs, dot) in sorted_items:
+                rhs_list = list(rhs)
+                rhs_list.insert(dot, '·')
+                if not rhs_list:
+                    rhs_list = ['·']
+                items_str.append(f"{lhs} -> {' '.join(rhs_list)}")
+            rows.append({"State": f"I{idx}", "Items": '\n'.join(items_str)})
+        return rows
+
+    def get_parsing_table_matrix(self):
+        """Get ACTION and GOTO table as matrix for display."""
+        action_syms = sorted(self.terminals)
+        goto_syms = sorted(nt for nt in self.non_terminals if nt != self.augmented_start)
+
+        rows = []
+        for state_idx in range(len(self.states)):
+            row = {"State": f"I{state_idx}"}
+            for sym in action_syms:
+                action = self.action_table.get((state_idx, sym))
+                row[sym] = self._format_action(action) if action else ''
+            for sym in goto_syms:
+                val = self.goto_table.get((state_idx, sym))
+                row[sym] = f"{val}" if val is not None else ''
+            rows.append(row)
+        return action_syms, goto_syms, rows
+
+    def get_transitions_display(self) -> List[Dict[str, str]]:
+        """Get transitions for display."""
+        rows = []
+        for t in self.transitions:
+            rows.append({
+                "From": f"I{t['from']}",
+                "Symbol": t['symbol'],
+                "To": f"I{t['to']}",
+                "Type": "Terminal" if t['kind'] == 'T' else "Non-Terminal"
+            })
+        return rows
+
+    # -------------------------------------------------------
+    # Parsing
+    # -------------------------------------------------------
+    def _tokenize(self, input_string: str) -> List[str]:
+        s = input_string.strip()
+        if not s.endswith(self.END_SYMBOL):
+            s += self.END_SYMBOL
+        tokens: List[str] = []
         i = 0
-        while i < len(input_string):
+        terminal_list = sorted(self.terminals, key=len, reverse=True)
+        while i < len(s):
+            if s[i].isspace():
+                i += 1
+                continue
             matched = False
-            sorted_terms = sorted(list(self.terminals), key=len, reverse=True)
-            for t in sorted_terms:
-                if input_string[i:].startswith(t):
-                    tokens.append(t)
-                    i += len(t)
+            for term in terminal_list:
+                if s[i:].startswith(term):
+                    tokens.append(term)
+                    i += len(term)
                     matched = True
                     break
             if not matched:
-                tokens.append(input_string[i])
+                tokens.append(s[i])
                 i += 1
-        
+        return tokens
+
+    def parse(self, input_string: str) -> List[Dict[str, str]]:
+        """Parse input string and return step-by-step trace."""
+        if not self.action_table:
+            raise ValueError("Parsing table has not been built. Call build_table() first.")
+
+        tokens = self._tokenize(input_string)
+
+        # Two stacks like C++: state stack and symbol stack
+        state_stack: List[int] = [0]
+        symbol_stack: List[str] = [self.END_SYMBOL]
+
         idx = 0
+        steps: List[Dict[str, str]] = []
+        step_count = 0
+
         while True:
-            state = stack[-1]
-            current_token = tokens[idx] if idx < len(tokens) else None
-            
+            step_count += 1
+            state = state_stack[-1]
+            lookahead = tokens[idx] if idx < len(tokens) else self.END_SYMBOL
+
+            # Format stacks for display
+            state_str = ' '.join(f"I{s}" for s in state_stack)
+            symbol_str = ' '.join(symbol_stack)
+            remaining = ''.join(tokens[idx:])
+
+            action = self.action_table.get((state, lookahead))
+
             step_info = {
-                "stack": str(stack),
-                "input": "".join(tokens[idx:]),
-                "action": ""
+                "Step": str(step_count),
+                "State Stack": state_str,
+                "Symbol Stack": symbol_str,
+                "Input": remaining,
+                "Action": "",
+                "ACTION": "",
+                "GOTO": ""
             }
-            
-            if (state, current_token) in self.action_table:
-                action = self.action_table[(state, current_token)]
-                if action[0] == 'shift':
-                    step_info["action"] = f"Shift {action[1]}"
-                    stack.append(current_token) # Push symbol (optional, usually just state is enough for logic, but for debug/output we might want it)
-                    # Wait, standard LR stack is s0 X1 s1 X2 s2 ...
-                    # My stack currently only has states? 
-                    # Let's push symbol then state.
-                    stack.append(action[1])
-                    idx += 1
-                elif action[0] == 'reduce':
-                    prod_idx = action[1]
-                    lhs, rhs = self.productions[prod_idx]
-                    step_info["action"] = f"Reduce {lhs} -> {' '.join(rhs)}"
-                    
-                    # Pop 2 * |rhs| items
-                    num_to_pop = 0
-                    if rhs != ('^',):
-                        num_to_pop = 2 * len(rhs)
-                    
-                    for _ in range(num_to_pop):
-                        stack.pop()
-                    
-                    top_state = stack[-1]
-                    if (top_state, lhs) in self.goto_table:
-                        new_state = self.goto_table[(top_state, lhs)]
-                        stack.append(lhs)
-                        stack.append(new_state)
-                    else:
-                        step_info["action"] = "Error (Goto)"
-                        steps.append(step_info)
-                        break
-                elif action[0] == 'accept':
-                    step_info["action"] = "Accept"
-                    steps.append(step_info)
-                    break
-            else:
-                step_info["action"] = "Error"
+
+            if not action:
+                step_info["Action"] = "Error"
                 steps.append(step_info)
                 break
-            
-            steps.append(step_info)
-            
+
+            if action[0] == 'shift':
+                next_state = action[1]
+                step_info["Action"] = "Shift"
+                step_info["ACTION"] = f"s{next_state}"
+                steps.append(step_info)
+
+                state_stack.append(next_state)
+                symbol_stack.append(lookahead)
+                idx += 1
+
+            elif action[0] == 'reduce':
+                prod_idx = action[1]
+                lhs, rhs = self.productions[prod_idx]
+                rhs_len = 0 if rhs == (self.EPSILON,) or rhs == () else len(rhs)
+
+                rhs_str = ' '.join(rhs) if rhs and rhs != (self.EPSILON,) else self.EPSILON
+                step_info["Action"] = f"Reduce: {lhs} -> {rhs_str}"
+                step_info["ACTION"] = f"r{prod_idx}"
+
+                # Pop from stacks
+                for _ in range(rhs_len):
+                    if len(state_stack) > 1:
+                        state_stack.pop()
+                    if len(symbol_stack) > 1:
+                        symbol_stack.pop()
+
+                # Look up GOTO
+                top_state = state_stack[-1]
+                goto_state = self.goto_table.get((top_state, lhs))
+                if goto_state is None:
+                    step_info["GOTO"] = "Error"
+                    steps.append(step_info)
+                    break
+
+                step_info["GOTO"] = f"{goto_state}"
+                steps.append(step_info)
+
+                state_stack.append(goto_state)
+                symbol_stack.append(lhs)
+
+            elif action[0] == 'accept':
+                step_info["Action"] = "Accept ✓"
+                step_info["ACTION"] = "acc"
+                steps.append(step_info)
+                break
+
+            else:
+                step_info["Action"] = "Error"
+                steps.append(step_info)
+                break
+
         return steps
