@@ -4,6 +4,7 @@ import graphviz
 from src.compiler.lexical_analyzer import LexicalAnalyzer
 from src.compiler.rg_nfa import RG_NFA_Converter
 from src.compiler.ll1_parser import LL1Parser
+from src.compiler.slr_parser import SLRParser
 
 # ==========================================
 # Streamlit UI
@@ -12,7 +13,7 @@ from src.compiler.ll1_parser import LL1Parser
 st.set_page_config(page_title="Compiler Principles Visualization", layout="wide")
 st.title("Compiler Principles Visualization System")
 
-tab1, tab2, tab3 = st.tabs(["Lexical Analysis", "Regular Grammar to NFA", "LL(1) Parsing"])
+tab1, tab2, tab3, tab4 = st.tabs(["Lexical Analysis", "Regular Grammar to NFA", "LL(1) Parsing", "SLR(1) Parsing"])
 
 # --- Tab 1: Lexical Analysis ---
 with tab1:
@@ -122,4 +123,88 @@ F -> ( E ) | i"""
         st.subheader("Parsing Process")
         steps = parser.parse(ll1_input_str)
         st.table(pd.DataFrame(steps))
+
+# --- Tab 4: SLR(1) Parsing ---
+with tab4:
+    st.header("SLR(1) Parser")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Grammar")
+        default_slr = """E -> E + T | T
+T -> T * F | F
+F -> ( E ) | i"""
+        slr_grammar_input = st.text_area("SLR(1) Grammar", value=default_slr, height=200, key="slr_grammar")
+        
+    with col2:
+        st.subheader("Input String")
+        slr_input_str = st.text_input("Input String (end with #)", value="i+i*i#", key="slr_input")
+    
+    if st.button("Parse", key="slr_btn"):
+        parser = SLRParser()
+        parser.parse_grammar(slr_grammar_input)
+        parser.build_table() # This computes first, follow, and builds tables
+        
+        st.subheader("First & Follow Sets")
+        ff_data = []
+        for nt in parser.non_terminals:
+            if nt == parser.augmented_start: continue
+            ff_data.append({
+                "Non-Terminal": nt,
+                "First": ", ".join(parser.first[nt]),
+                "Follow": ", ".join(parser.follow[nt])
+            })
+        st.table(pd.DataFrame(ff_data))
+        
+        st.subheader("Canonical Collection of LR(0) Items")
+        states_data = []
+        for i, state in enumerate(parser.states):
+            items_str = []
+            for (lhs, rhs, dot) in state:
+                rhs_list = list(rhs)
+                rhs_list.insert(dot, ".")
+                items_str.append(f"{lhs} -> {' '.join(rhs_list)}")
+            states_data.append({
+                "State ID": i,
+                "Items": "\n".join(items_str)
+            })
+        st.table(pd.DataFrame(states_data))
+
+        st.subheader("Parsing Table")
+        # Combine Action and Goto tables
+        # Columns: Terminals (Action) + Non-Terminals (Goto)
+        all_symbols = sorted(list(parser.terminals)) + sorted(list(parser.non_terminals))
+        if parser.augmented_start in all_symbols:
+            all_symbols.remove(parser.augmented_start)
+            
+        table_rows = []
+        for i in range(len(parser.states)):
+            row_dict = {"State": i}
+            for sym in all_symbols:
+                val = ""
+                if sym in parser.terminals:
+                    if (i, sym) in parser.action_table:
+                        action = parser.action_table[(i, sym)]
+                        if action[0] == 'shift':
+                            val = f"s{action[1]}"
+                        elif action[0] == 'reduce':
+                            val = f"r{action[1]}"
+                        elif action[0] == 'accept':
+                            val = "acc"
+                elif sym in parser.non_terminals:
+                    if (i, sym) in parser.goto_table:
+                        val = str(parser.goto_table[(i, sym)])
+                
+                row_dict[sym] = val
+            table_rows.append(row_dict)
+            
+        st.dataframe(pd.DataFrame(table_rows).set_index("State"))
+        
+        st.subheader("Parsing Process")
+        try:
+            steps = parser.parse(slr_input_str)
+            st.table(pd.DataFrame(steps))
+        except Exception as e:
+            st.error(f"Parsing Error: {e}")
 
